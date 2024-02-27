@@ -16,6 +16,11 @@ void check_prime_range(int start, int end, std::vector<int> &primes, int socket,
 
 int main() {
     int upperBound, numThreads;
+    char useSlave;
+
+    std::cout << "Do you want to use a slave server? (y/n): ";
+    std::cin >> useSlave;
+
     std::cout << "Enter the upper bound for checking primes (upper bound is " << LIMIT << "): ";
     while (!(std::cin >> upperBound) || upperBound < 2 || upperBound > LIMIT) {
         std::cout << "Invalid input. Please enter an integer greater than 1 and less than " << LIMIT << ": ";
@@ -37,33 +42,50 @@ int main() {
 
     int chunk = upperBound / numThreads;
 
-    // Create socket for communication with slave
-    int slave_socket;
-    if ((slave_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-        perror("socket failed");
-        exit(EXIT_FAILURE);
-    }
+    if (useSlave == 'y') {
+        // Create socket for communication with slave
+        int slave_socket;
+        if ((slave_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+            perror("socket failed");
+            exit(EXIT_FAILURE);
+        }
 
-    struct sockaddr_in slave_address;
-    slave_address.sin_family = AF_INET;
-    slave_address.sin_addr.s_addr = INADDR_ANY;
-    slave_address.sin_port = htons(PORT_SLAVE);
+        struct sockaddr_in slave_address;
+        slave_address.sin_family = AF_INET;
+        slave_address.sin_addr.s_addr = INADDR_ANY;
+        slave_address.sin_port = htons(PORT_SLAVE);
 
-    // Connect to the slave server
-    if (connect(slave_socket, (struct sockaddr*)&slave_address, sizeof(slave_address)) < 0) {
-        perror("Connection to slave failed");
-        exit(EXIT_FAILURE);
-    }
+        // Connect to the slave server
+        if (connect(slave_socket, (struct sockaddr*)&slave_address, sizeof(slave_address)) < 0) {
+            perror("Connection to slave failed");
+            exit(EXIT_FAILURE);
+        }
 
-    std::mutex &local_mutex = prime_mutex; // capture the reference locally
-    int local_numThreads = numThreads;    // capture the value locally
+        std::mutex &local_mutex = prime_mutex; // capture the reference locally
+        int local_numThreads = numThreads;    // capture the value locally
 
-    threads.push_back(std::thread([&primes, slave_socket, chunk, upperBound, local_numThreads, &local_mutex]() {
-        check_prime_range(0 * chunk + (0 == 0 ? 2 : 1), (0 == local_numThreads - 1) ? upperBound : (0 + 1) * chunk, primes, slave_socket, local_mutex);
-    }));
+        threads.push_back(std::thread([&primes, slave_socket, chunk, upperBound, local_numThreads, &local_mutex]() {
+            check_prime_range(0 * chunk + (0 == 0 ? 2 : 1), (0 == local_numThreads - 1) ? upperBound : (0 + 1) * chunk, primes, slave_socket, local_mutex);
+        }));
 
-    for (auto &th : threads) {
-        th.join();
+        for (auto &th : threads) {
+            th.join();
+        }
+
+        close(slave_socket);  // Close the socket to the slave
+    } else {
+        // Code to handle prime computation without slave server (similar to your previous master.cpp)
+        for (int i = 0; i < numThreads; ++i) {
+            std::mutex &local_mutex = prime_mutex; // capture the reference locally
+            int local_numThreads = numThreads;    // capture the value locally
+            threads.push_back(std::thread([i, &primes, chunk, upperBound, local_numThreads, &local_mutex]() {
+                check_prime_range(i * chunk + (i == 0 ? 2 : 1), (i == local_numThreads - 1) ? upperBound : (i + 1) * chunk, primes, -1, local_mutex);
+            }));
+        }
+
+        for (auto &th : threads) {
+            th.join();
+        }
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -71,8 +93,6 @@ int main() {
 
     std::cout << primes.size() << " primes were found." << std::endl;
     std::cout << "Time taken: " << duration << " milliseconds." << std::endl;
-
-    close(slave_socket);  // Close the socket to the slave
 
     return 0;
 }
@@ -87,8 +107,15 @@ void check_prime_range(int start, int end, std::vector<int> &primes, int socket,
             }
         }
         if (is_prime) {
-            std::lock_guard<std::mutex> guard(prime_mutex); // locks the mutex for thread safety
-            primes.push_back(n);                            // critical section
+            if (socket != -1) {
+                // If socket is provided, send result to the slave server
+                std::lock_guard<std::mutex> guard(prime_mutex); // locks the mutex for thread safety
+                send(socket, &n, sizeof(n), 0);
+            } else {
+                // If no socket, compute locally and store in the vector
+                std::lock_guard<std::mutex> guard(prime_mutex); // locks the mutex for thread safety
+                primes.push_back(n);                            // critical section
+            }
         }
     }
 }
