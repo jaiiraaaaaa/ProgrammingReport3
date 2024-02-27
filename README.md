@@ -6,9 +6,9 @@ Members
 - Jaira Santos
  
 To compile:
-g++ -std=c++11 master.cpp -o master
-g++ -std=c++11 slave.cpp -o slave
+- g++ -std=c++11 master.cpp -o master
+- g++ -std=c++11 slave.cpp -o slave
 
 To run:
-./master
-./slave
+- ./master
+- ./slave

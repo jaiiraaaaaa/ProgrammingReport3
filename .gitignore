@@ -5,6 +5,7 @@
 
 # Executables
 *.out
+a.out
 
 # Compiled C++ programs
 *.exe
