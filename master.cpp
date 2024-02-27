@@ -7,7 +7,8 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-#define PORT 8081
+#define PORT_MASTER 9000
+#define PORT_SLAVE 9001
 #define LIMIT 10000000
 std::mutex prime_mutex;  // mutex lock for mutual exclusion and thread safety
 
@@ -36,47 +37,30 @@ int main() {
 
     int chunk = upperBound / numThreads;
 
-    // Create socket
-    int server_fd, new_socket;
-    struct sockaddr_in address;
-    int addrlen = sizeof(address);
-
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+    // Create socket for communication with slave
+    int slave_socket;
+    if ((slave_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
         perror("socket failed");
         exit(EXIT_FAILURE);
     }
 
-    int reuse = 1;
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
-        perror("setsockopt failed");
+    struct sockaddr_in slave_address;
+    slave_address.sin_family = AF_INET;
+    slave_address.sin_addr.s_addr = INADDR_ANY;
+    slave_address.sin_port = htons(PORT_SLAVE);
+
+    // Connect to the slave server
+    if (connect(slave_socket, (struct sockaddr*)&slave_address, sizeof(slave_address)) < 0) {
+        perror("Connection to slave failed");
         exit(EXIT_FAILURE);
     }
 
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(PORT);
+    std::mutex &local_mutex = prime_mutex; // capture the reference locally
+    int local_numThreads = numThreads;    // capture the value locally
 
-    // Attempt to bind the socket with retry
-    while (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) == -1) {
-        perror("Binding failed");
-        sleep(1); // Wait for 1 second before retrying
-    }
-
-    if (listen(server_fd, numThreads) < 0) {
-        perror("listen failed");
-        exit(EXIT_FAILURE);
-    }
-
-    std::cout << "Master Server is listening on port " << PORT << std::endl;
-
-    for (int i = 0; i < numThreads; ++i) {
-        new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t *)&addrlen);
-        std::mutex &local_mutex = prime_mutex; // capture the reference locally
-        int local_numThreads = numThreads;    // capture the value locally
-        threads.push_back(std::thread([i, &primes, new_socket, chunk, upperBound, local_numThreads, &local_mutex]() {
-            check_prime_range(i * chunk + (i == 0 ? 2 : 1), (i == local_numThreads - 1) ? upperBound : (i + 1) * chunk, primes, new_socket, local_mutex);
-        }));
-    }
+    threads.push_back(std::thread([&primes, slave_socket, chunk, upperBound, local_numThreads, &local_mutex]() {
+        check_prime_range(0 * chunk + (0 == 0 ? 2 : 1), (0 == local_numThreads - 1) ? upperBound : (0 + 1) * chunk, primes, slave_socket, local_mutex);
+    }));
 
     for (auto &th : threads) {
         th.join();
@@ -87,6 +71,8 @@ int main() {
 
     std::cout << primes.size() << " primes were found." << std::endl;
     std::cout << "Time taken: " << duration << " milliseconds." << std::endl;
+
+    close(slave_socket);  // Close the socket to the slave
 
     return 0;
 }
