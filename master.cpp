@@ -15,12 +15,11 @@ std::mutex prime_mutex;  // mutex lock for mutual exclusion and thread safety
 void check_prime_range(int start, int end, std::vector<int> &primes, int socket, std::mutex &prime_mutex);
 
 int main() {
-    int upperBound, numThreads;
     char useSlave;
-
     std::cout << "Do you want to use a slave server? (y/n): ";
     std::cin >> useSlave;
 
+    int upperBound, numThreads;
     std::cout << "Enter the upper bound for checking primes (upper bound is " << LIMIT << "): ";
     while (!(std::cin >> upperBound) || upperBound < 2 || upperBound > LIMIT) {
         std::cout << "Invalid input. Please enter an integer greater than 1 and less than " << LIMIT << ": ";
@@ -40,7 +39,7 @@ int main() {
     std::vector<int> primes;
     std::vector<std::thread> threads;
 
-    int chunk = upperBound / numThreads;
+    int chunk = upperBound / (useSlave == 'y' ? 2 : 1) / numThreads;  // Divide by 2 if using a slave
 
     if (useSlave == 'y') {
         // Create socket for communication with slave
@@ -61,31 +60,29 @@ int main() {
             exit(EXIT_FAILURE);
         }
 
-        std::mutex &local_mutex = prime_mutex; // capture the reference locally
-        int local_numThreads = numThreads;    // capture the value locally
+        // Send the range to the slave
+        int start = 2;
+        int end = upperBound / 2;
+        send(slave_socket, &start, sizeof(start), 0);
+        send(slave_socket, &end, sizeof(end), 0);
 
-        threads.push_back(std::thread([&primes, slave_socket, chunk, upperBound, local_numThreads, &local_mutex]() {
-            check_prime_range(0 * chunk + (0 == 0 ? 2 : 1), (0 == local_numThreads - 1) ? upperBound : (0 + 1) * chunk, primes, slave_socket, local_mutex);
+        // Close the socket to the slave
+        close(slave_socket);
+    }
+
+    // Master's task division
+    std::mutex &local_mutex = prime_mutex; // capture the reference locally
+    int local_numThreads = numThreads;    // capture the value locally
+
+    for (int i = 0; i < numThreads; ++i) {
+        threads.push_back(std::thread([&primes, chunk, upperBound, local_numThreads, &local_mutex, i, useSlave]() {
+            check_prime_range(i * chunk + (i == 0 ? 2 : 1) + (useSlave == 'y' ? upperBound / 2 : 0), (i == local_numThreads - 1) ? upperBound : (i + 1) * chunk + (useSlave == 'y' ? upperBound / 2 : 0), primes, -1, local_mutex);
         }));
+    }
 
-        for (auto &th : threads) {
-            th.join();
-        }
-
-        close(slave_socket);  // Close the socket to the slave
-    } else {
-        // Code to handle prime computation without slave server (similar to your previous master.cpp)
-        for (int i = 0; i < numThreads; ++i) {
-            std::mutex &local_mutex = prime_mutex; // capture the reference locally
-            int local_numThreads = numThreads;    // capture the value locally
-            threads.push_back(std::thread([i, &primes, chunk, upperBound, local_numThreads, &local_mutex]() {
-                check_prime_range(i * chunk + (i == 0 ? 2 : 1), (i == local_numThreads - 1) ? upperBound : (i + 1) * chunk, primes, -1, local_mutex);
-            }));
-        }
-
-        for (auto &th : threads) {
-            th.join();
-        }
+    // Wait for threads to complete
+    for (auto &th : threads) {
+        th.join();
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -108,13 +105,12 @@ void check_prime_range(int start, int end, std::vector<int> &primes, int socket,
         }
         if (is_prime) {
             if (socket != -1) {
-                // If socket is provided, send result to the slave server
-                std::lock_guard<std::mutex> guard(prime_mutex); // locks the mutex for thread safety
-                send(socket, &n, sizeof(n), 0);
-            } else {
-                // If no socket, compute locally and store in the vector
+                // Communication with slave
                 std::lock_guard<std::mutex> guard(prime_mutex); // locks the mutex for thread safety
                 primes.push_back(n);                            // critical section
+            } else {
+                // Local computation by the master
+                primes.push_back(n);
             }
         }
     }

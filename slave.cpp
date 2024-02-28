@@ -67,17 +67,31 @@ void handle_connection(int serverSocket)
         exit(EXIT_FAILURE);
     }
 
+    std::cout << "Successfully connected with the master server." << std::endl;
+
     int start, end;
     recv(masterSocket, &start, sizeof(start), 0);
     recv(masterSocket, &end, sizeof(end), 0);
 
+    std::cout << "Received range of values from master: [" << start << ", " << end << "]" << std::endl;
+
     std::vector<int> primes;
     std::mutex prime_mutex; // create a local mutex for this thread
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+
     check_prime_range(start, end, primes, masterSocket, prime_mutex);
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+    std::cout << "Completed checking primes. Time taken: " << duration << " milliseconds." << std::endl;
 
     int primeCount = primes.size();
     send(masterSocket, &primeCount, sizeof(primeCount), 0);
     send(masterSocket, primes.data(), primeCount * sizeof(int), 0);
+
+    std::cout << "Sent the list/number of primes to the master server." << std::endl;
 
     // Clean up
     close(masterSocket);
@@ -98,8 +112,17 @@ void check_prime_range(int start, int end, std::vector<int> &primes, int socket,
         }
         if (is_prime)
         {
-            std::lock_guard<std::mutex> guard(prime_mutex);
-            primes.push_back(n);
+            if (socket != -1)
+            {
+                // Communication with master
+                std::lock_guard<std::mutex> guard(prime_mutex); // locks the mutex for thread safety
+                primes.push_back(n);                            // critical section
+            }
+            else
+            {
+                // Local computation by the slave
+                primes.push_back(n);
+            }
         }
     }
 }
