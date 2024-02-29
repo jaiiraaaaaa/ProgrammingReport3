@@ -3,9 +3,18 @@
 #include <thread>
 #include <chrono>
 #include <cstring>
+#include <cstdlib>
+#include <limits>
+#include <mutex>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#endif
 
 #define PORT_MASTER 9000
 #define PORT_SLAVE 9001
@@ -40,7 +49,7 @@ int main() {
     std::vector<std::thread> threads;
 
     int chunk = upperBound / (useSlave == 'y' ? 2 : 1) / numThreads;  // Divide by 2 if using a slave
-
+    int slave_socket = -1; // Initialize to -1
     if (useSlave == 'y') {
         // Create socket for communication with slave
         int slave_socket;
@@ -95,6 +104,8 @@ int main() {
 }
 
 void check_prime_range(int start, int end, std::vector<int> &primes, int socket, std::mutex &prime_mutex) {
+    std::cout << "Checking range: [" << start << ", " << end << "]" << std::endl;
+
     for (int n = start; n <= end; n++) {
         bool is_prime = true;
         for (int i = 2; i * i <= n; i++) {
@@ -106,12 +117,18 @@ void check_prime_range(int start, int end, std::vector<int> &primes, int socket,
         if (is_prime) {
             if (socket != -1) {
                 // Communication with slave
-                std::lock_guard<std::mutex> guard(prime_mutex); // locks the mutex for thread safety
-                primes.push_back(n);                            // critical section
+                std::lock_guard<std::mutex> guard(prime_mutex);
+                primes.push_back(n);
             } else {
                 // Local computation by the master
-                primes.push_back(n);
+                {
+                    // Use a local lock guard to minimize the lock duration
+                    std::lock_guard<std::mutex> guard(prime_mutex);
+                    primes.push_back(n);
+                }
             }
         }
     }
+
+    std::cout << "Range checked: [" << start << ", " << end << "]" << std::endl;
 }
