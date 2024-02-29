@@ -7,12 +7,50 @@
 #include <cstring>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <cmath>
 
 #define PORT 9001
+
+bool is_prime(int n) {
+    if (n <= 1) {
+        return false;
+    }
+
+    for (int i = 2; i <= std::sqrt(n); ++i) {
+        if (n % i == 0) {
+            return false;
+        }
+    }
+
+    return true;
+}
 
 void check_prime_range(int start, int end, std::vector<int> &primes, int socket, std::mutex &prime_mutex);
 
 void handle_connection(int serverSocket);
+
+void print_and_verify_primes(int start, int end, int primeCount) {
+    std::vector<int> primesLocally;
+    for (int n = start; n <= end; n++) {
+        if (is_prime(n)) {
+            primesLocally.push_back(n);
+        }
+    }
+
+    // Print the number of primes computed locally
+    std::cout << "\nNumber of primes computed locally: " << primesLocally.size() << std::endl;
+
+    // Print the number of primes computed through check_prime_range
+    std::cout << "Number of primes computed through check_prime_range: " << primeCount << std::endl;
+
+    // Print TRUE if the counts match, otherwise print FALSE
+    if (primesLocally.size() == static_cast<size_t>(primeCount)) {
+        std::cout << "SANITY CHECK: TRUE" << std::endl;
+    } else {
+        std::cout << "SANITY CHECK: FALSE" << std::endl;
+    }
+}
+
 
 void slave_server()
 {
@@ -67,7 +105,12 @@ void handle_connection(int serverSocket)
         exit(EXIT_FAILURE);
     }
 
-    std::cout << "Successfully connected with the master server." << std::endl;
+    std::cout << "\nSuccessfully connected with the master server." << std::endl;
+
+    // Receive the number of threads from the master
+    int numThreads;
+    recv(masterSocket, &numThreads, sizeof(numThreads), 0);
+    std::cout << "Received number of threads from master: " << numThreads << std::endl;
 
     int start, end;
     recv(masterSocket, &start, sizeof(start), 0);
@@ -80,25 +123,54 @@ void handle_connection(int serverSocket)
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    check_prime_range(start, end, primes, masterSocket, prime_mutex);
+    // Create threads for prime checking
+    std::vector<std::thread> threads;
+    int chunk = (end - start + 1) / numThreads;
 
+    for (int i = 0; i < numThreads; ++i)
+    {
+        threads.push_back(std::thread([&, i]() {
+            int thread_start = start + i * chunk;
+            int thread_end = (i == numThreads - 1) ? end : thread_start + chunk - 1;
+
+            try
+            {
+                // Use std::lock_guard for thread safety
+                std::lock_guard<std::mutex> guard(prime_mutex);
+                check_prime_range(thread_start, thread_end, primes, -1, prime_mutex);
+            }
+            catch (const std::exception &ex)
+            {
+                // Handle exceptions that might occur during thread execution
+                std::cerr << "Thread exception: " << ex.what() << std::endl;
+            }
+        }));
+    }
+
+    // Wait for threads to complete
+    for (auto &th : threads)
+    {
+        th.join();
+    }
     auto end_time = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
     std::cout << "Completed checking primes. Time taken: " << duration << " milliseconds." << std::endl;
 
     int primeCount = primes.size();
-    std::cout << "Number of primes computed by the slave: " << primeCount << std::endl;
+
+    // Print and verify primes locally
+    print_and_verify_primes(start, end, primeCount);
 
     send(masterSocket, &primeCount, sizeof(primeCount), 0);
     send(masterSocket, primes.data(), primeCount * sizeof(int), 0);
 
-    std::cout << "Sent the list/number of primes to the master server." << std::endl;
+    std::cout << "\nSent the list/number of primes to the master server." << std::endl;
 
     // Shutdown and close the sockets
     shutdown(masterSocket, SHUT_RDWR);
     shutdown(serverSocket, SHUT_RDWR);
-    
+
     // Clean up
     close(masterSocket);
 }

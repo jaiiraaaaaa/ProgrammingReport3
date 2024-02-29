@@ -26,8 +26,13 @@ void check_prime_range(int start, int end, std::vector<int> &primes, int socket,
 int main() {
     char useSlave;
     std::cout << "Do you want to use a slave server? (y/n): ";
-    std::cin >> useSlave;
-
+    // Error checking for 'y' and 'n' inputs
+    while (!(std::cin >> useSlave) || (useSlave != 'y' && useSlave != 'n')) {
+        std::cout << "Invalid input. Please enter 'y' or 'n': ";
+        std::cin.clear();
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    }
+    
     int upperBound, numThreads;
     std::cout << "Enter the upper bound for checking primes (upper bound is " << LIMIT << "): ";
     while (!(std::cin >> upperBound) || upperBound < 2 || upperBound > LIMIT) {
@@ -69,6 +74,9 @@ int main() {
             exit(EXIT_FAILURE);
         }
 
+        // Send the number of threads to the slave
+        send(slave_socket, &numThreads, sizeof(numThreads), 0);
+
         // Send the range to the slave
         int start = 2;
         int end = upperBound / 2;
@@ -104,7 +112,7 @@ int main() {
         // Combine the results from the master and the slave
         primes.insert(primes.end(), slavePrimes.begin(), slavePrimes.end());
 
-        std::cout << "Number of primes received from the slave: " << slavePrimeCount << std::endl;
+        std::cout << "\nNumber of primes received from the slave: " << slavePrimeCount << std::endl;
 
         // Shutdown and close the socket to the slave
         shutdown(slave_socket, SHUT_RDWR);
@@ -121,7 +129,7 @@ int main() {
 }
 
 void check_prime_range(int start, int end, std::vector<int> &primes, int socket, std::mutex &prime_mutex) {
-    std::cout << "Checking range: [" << start << ", " << end << "]" << std::endl;
+    //std::cout << "Checking range: [" << start << ", " << end << "]" << std::endl;
 
     for (int n = start; n <= end; n++) {
         bool is_prime = true;
@@ -147,5 +155,5 @@ void check_prime_range(int start, int end, std::vector<int> &primes, int socket,
         }
     }
 
-    std::cout << "Range checked: [" << start << ", " << end << "]" << std::endl;
+    //std::cout << "Range checked: [" << start << ", " << end << "]" << std::endl;
 }
