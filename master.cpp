@@ -2,26 +2,22 @@
 #include <vector>
 #include <thread>
 #include <chrono>
-#include <cstring>
-#include <cstdlib>
 #include <limits>
 #include <mutex>
-
-#ifdef _WIN32
 #include <winsock2.h>
-#pragma comment(lib, "ws2_32.lib")
-#else
-#include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#endif
 
-#define PORT_MASTER 9000
-#define PORT_SLAVE 9001
+#define PORT_MASTER 49153
+#define PORT_SLAVE 49152
 #define LIMIT 10000000
-std::mutex prime_mutex;  // mutex lock for mutual exclusion and thread safety
+
+std::mutex prime_mutex;
 
 void check_prime_range(int start, int end, std::vector<int> &primes, int socket, std::mutex &prime_mutex);
+
+void cleanupSocket(SOCKET socket) {
+    shutdown(socket, SD_BOTH);
+    closesocket(socket);
+}
 
 int main() {
     char useSlave;
@@ -49,31 +45,65 @@ int main() {
     std::vector<std::thread> threads;
 
     int chunk = upperBound / (useSlave == 'y' ? 2 : 1) / numThreads;  // Divide by 2 if using a slave
-    int slave_socket = -1; // Initialize to -1
+    SOCKET slave_socket = INVALID_SOCKET; // Initialize to invalid socket
 
     if (useSlave == 'y') {
-        // Create socket for communication with slave
-        if ((slave_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-            perror("socket failed");
-            exit(EXIT_FAILURE);
+        WSADATA wsaData;
+        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+            std::cerr << "WSAStartup failed" << std::endl;
+            return EXIT_FAILURE;
+        }
+
+        if ((slave_socket = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
+            std::cerr << "Socket creation failed" << std::endl;
+            WSACleanup();
+            return EXIT_FAILURE;
+        }
+
+        int reuse = 1;
+        if (setsockopt(slave_socket, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse)) < 0) {
+            std::cerr << "setsockopt failed" << std::endl;
+            cleanupSocket(slave_socket);
+            WSACleanup();
+            return EXIT_FAILURE;
         }
 
         struct sockaddr_in slave_address;
         slave_address.sin_family = AF_INET;
-        slave_address.sin_addr.s_addr = INADDR_ANY;
+        slave_address.sin_addr.s_addr = INADDR_LOOPBACK; // Use localhost address
         slave_address.sin_port = htons(PORT_SLAVE);
 
         // Connect to the slave server
-        if (connect(slave_socket, (struct sockaddr*)&slave_address, sizeof(slave_address)) < 0) {
-            perror("Connection to slave failed");
-            exit(EXIT_FAILURE);
+        if (connect(slave_socket, (struct sockaddr*)&slave_address, sizeof(slave_address)) == SOCKET_ERROR) {
+            int error_code = WSAGetLastError();
+            std::cerr << "Connection to slave failed with error code: " << error_code << std::endl;
+            switch (error_code) {
+                case WSANOTINITIALISED:
+                    std::cerr << "Winsock not initialized." << std::endl;
+                    break;
+                case WSAENETDOWN:
+                    std::cerr << "Network subsystem failed." << std::endl;
+                    break;
+                // Add more cases to handle specific error codes if necessary
+                default:
+                    std::cerr << "Unknown error." << std::endl;
+                    break;
+            }
+            cleanupSocket(slave_socket);
+            WSACleanup();
+            return EXIT_FAILURE;
         }
 
         // Send the range to the slave
         int start = 2;
         int end = upperBound / 2;
-        send(slave_socket, &start, sizeof(start), 0);
-        send(slave_socket, &end, sizeof(end), 0);
+        if (send(slave_socket, reinterpret_cast<const char*>(&start), sizeof(start), 0) == SOCKET_ERROR ||
+            send(slave_socket, reinterpret_cast<const char*>(&end), sizeof(end), 0) == SOCKET_ERROR) {
+            std::cerr << "Failed to send data to slave" << std::endl;
+            cleanupSocket(slave_socket);
+            WSACleanup();
+            return EXIT_FAILURE;
+        }
     }
 
     // Master's task division
@@ -82,7 +112,9 @@ int main() {
 
     for (int i = 0; i < numThreads; ++i) {
         threads.push_back(std::thread([&primes, chunk, upperBound, local_numThreads, &local_mutex, i, useSlave]() {
-            check_prime_range(i * chunk + (i == 0 ? 2 : 1) + (useSlave == 'y' ? upperBound / 2 : 0), (i == local_numThreads - 1) ? upperBound : (i + 1) * chunk + (useSlave == 'y' ? upperBound / 2 : 0), primes, -1, local_mutex);
+            check_prime_range(i * chunk + (i == 0 ? 2 : 1) + (useSlave == 'y' ? upperBound / 2 : 0), 
+                              (i == local_numThreads - 1) ? upperBound : (i + 1) * chunk + (useSlave == 'y' ? upperBound / 2 : 0), 
+                              primes, -1, local_mutex);
         }));
     }
 
@@ -93,22 +125,29 @@ int main() {
 
     // Communication with slave (if used)
     if (useSlave == 'y') {
-        // Separate scope to control the lifetime of slave_socket
         // Receive the count and list of primes from the slave
         int slavePrimeCount;
-        recv(slave_socket, &slavePrimeCount, sizeof(slavePrimeCount), 0);
+        if (recv(slave_socket, reinterpret_cast<char*>(&slavePrimeCount), sizeof(slavePrimeCount), 0) == SOCKET_ERROR) {
+            std::cerr << "Failed to receive prime count from slave" << std::endl;
+            cleanupSocket(slave_socket);
+            WSACleanup();
+            return EXIT_FAILURE;
+        }
 
         std::vector<int> slavePrimes(slavePrimeCount);
-        recv(slave_socket, slavePrimes.data(), slavePrimeCount * sizeof(int), 0);
+        if (recv(slave_socket, reinterpret_cast<char*>(slavePrimes.data()), slavePrimeCount * sizeof(int), 0) == SOCKET_ERROR) {
+            std::cerr << "Failed to receive primes from slave" << std::endl;
+            cleanupSocket(slave_socket);
+            WSACleanup();
+            return EXIT_FAILURE;
+        }
 
         // Combine the results from the master and the slave
         primes.insert(primes.end(), slavePrimes.begin(), slavePrimes.end());
 
         std::cout << "Number of primes received from the slave: " << slavePrimeCount << std::endl;
 
-        // Shutdown and close the socket to the slave
-        shutdown(slave_socket, SHUT_RDWR);
-        close(slave_socket);
+        cleanupSocket(slave_socket);
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -116,6 +155,8 @@ int main() {
 
     std::cout << primes.size() << " primes were found." << std::endl;
     std::cout << "Time taken: " << duration << " milliseconds." << std::endl;
+
+    WSACleanup(); // Clean up Winsock
 
     return 0;
 }
