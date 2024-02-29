@@ -50,9 +50,9 @@ int main() {
 
     int chunk = upperBound / (useSlave == 'y' ? 2 : 1) / numThreads;  // Divide by 2 if using a slave
     int slave_socket = -1; // Initialize to -1
+
     if (useSlave == 'y') {
         // Create socket for communication with slave
-        int slave_socket;
         if ((slave_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
             perror("socket failed");
             exit(EXIT_FAILURE);
@@ -74,9 +74,6 @@ int main() {
         int end = upperBound / 2;
         send(slave_socket, &start, sizeof(start), 0);
         send(slave_socket, &end, sizeof(end), 0);
-
-        // Close the socket to the slave
-        close(slave_socket);
     }
 
     // Master's task division
@@ -92,6 +89,26 @@ int main() {
     // Wait for threads to complete
     for (auto &th : threads) {
         th.join();
+    }
+
+    // Communication with slave (if used)
+    if (useSlave == 'y') {
+        // Separate scope to control the lifetime of slave_socket
+        // Receive the count and list of primes from the slave
+        int slavePrimeCount;
+        recv(slave_socket, &slavePrimeCount, sizeof(slavePrimeCount), 0);
+
+        std::vector<int> slavePrimes(slavePrimeCount);
+        recv(slave_socket, slavePrimes.data(), slavePrimeCount * sizeof(int), 0);
+
+        // Combine the results from the master and the slave
+        primes.insert(primes.end(), slavePrimes.begin(), slavePrimes.end());
+
+        std::cout << "Number of primes received from the slave: " << slavePrimeCount << std::endl;
+
+        // Shutdown and close the socket to the slave
+        shutdown(slave_socket, SHUT_RDWR);
+        close(slave_socket);
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();

@@ -88,11 +88,17 @@ void handle_connection(int serverSocket)
     std::cout << "Completed checking primes. Time taken: " << duration << " milliseconds." << std::endl;
 
     int primeCount = primes.size();
+    std::cout << "Number of primes computed by the slave: " << primeCount << std::endl;
+
     send(masterSocket, &primeCount, sizeof(primeCount), 0);
     send(masterSocket, primes.data(), primeCount * sizeof(int), 0);
 
     std::cout << "Sent the list/number of primes to the master server." << std::endl;
 
+    // Shutdown and close the sockets
+    shutdown(masterSocket, SHUT_RDWR);
+    shutdown(serverSocket, SHUT_RDWR);
+    
     // Clean up
     close(masterSocket);
 }
