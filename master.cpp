@@ -18,7 +18,7 @@
 
 #define PORT_MASTER 9000
 #define PORT_SLAVE 9001
-#define LIMIT 10000000
+#define LIMIT 100000000
 std::mutex prime_mutex;  // mutex lock for mutual exclusion and thread safety
 
 void check_prime_range(int start, int end, std::vector<int> &primes, int socket, std::mutex &prime_mutex);
